@@ -12,35 +12,30 @@ def check_password():
         """Comprueba si las credenciales coinciden."""
         if st.session_state["username"] == "admin" and st.session_state["password"] == "medico2026":
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Seguridad: eliminar contraseña del estado
+            del st.session_state["password"]
             del st.session_state["username"]
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # Pantalla inicial de Login
         st.title("🔐 Acceso al Portal Clínico")
         st.text_input("Usuario", on_change=password_entered, key="username")
         st.text_input("Contraseña", type="password", on_change=password_entered, key="password")
         return False
     elif not st.session_state["password_correct"]:
-        # Intento fallido
         st.title("🔐 Acceso al Portal Clínico")
         st.text_input("Usuario", on_change=password_entered, key="username")
         st.text_input("Contraseña", type="password", on_change=password_entered, key="password")
         st.error("😕 Usuario o contraseña incorrectos")
         return False
     else:
-        # Acceso concedido
         return True
 
 # 2. Aplicación Principal (Solo se ejecuta tras el Login)
 if check_password():
     
-    # Configuración de página
     st.set_page_config(page_title="VCI Farmacogenómico", page_icon="💊", layout="wide")
 
-    # Barra lateral de usuario
     with st.sidebar:
         st.header("Panel de Control")
         st.write(f"Usuario: **Especialista Clínico**")
@@ -53,6 +48,16 @@ if check_password():
 
     # --- FUNCIONES DEL MOTOR BIOINFORMÁTICO ---
 
+    @st.cache_data
+    def cargar_base_datos():
+        """Carga el CSV en memoria para consultas rápidas."""
+        try:
+            # Intentamos leer el archivo en la carpeta data
+            return pd.read_csv("data/bd_farmacos.csv", index_col="ID_Variante")
+        except Exception as e:
+            st.error(f"Error al cargar la base de datos: Asegúrate de que el archivo 'data/bd_farmacos.csv' existe.")
+            return pd.DataFrame()
+
     def consultar_ensembl(rs_id):
         servidor = "https://rest.ensembl.org"
         endpoint = f"/variation/human/{rs_id}?"
@@ -64,14 +69,18 @@ if check_password():
             return ", ".join(significado) if significado else "Desconocido"
         except: return "Error de conexión"
 
-    def consultar_farmacogenomica(rs_id):
-        # Base de datos simulada para el MVP
-        bd_farmacos = {
-            "rs6054257": {"farmaco": "Estatinas (Colesterol)", "recomendacion": "[RIESGO] Alta probabilidad de miopatia. Reducir dosis."},
-            "rs6040355": {"farmaco": "Antidepresivos (ISRS)", "recomendacion": "[ATENCION] Metabolismo rapido. Posible ineficacia."},
-            "rs1801280": {"farmaco": "Warfarina", "recomendacion": "[PELIGRO] Toxicidad severa. Evitar prescripcion."},
+    def consultar_farmacogenomica(rs_id, df_bd):
+        """Busca interacciones en el DataFrame de la base de datos externa."""
+        if not df_bd.empty and rs_id in df_bd.index:
+            fila = df_bd.loc[rs_id]
+            return {
+                "farmaco": str(fila["Farmaco"]),
+                "recomendacion": str(fila["Recomendacion"])
+            }
+        return {
+            "farmaco": "Sin contraindicaciones",
+            "recomendacion": "Dosis estandar segura."
         }
-        return bd_farmacos.get(rs_id, {"farmaco": "Sin contraindicaciones", "recomendacion": "Dosis estandar segura."})
 
     def generar_pdf_bytes(df_resultados):
         pdf = FPDF()
@@ -104,36 +113,42 @@ if check_password():
         st.info(f"✅ Archivo VCF procesado. Se han detectado {len(variantes_conocidas)} variantes con ID.")
         
         if st.button("Ejecutar Análisis Clínico"):
-            variantes_analisis = variantes_conocidas.head(5).copy()
-            resultados_sig, lista_farmacos, lista_recom = [], [], []
+            # Paso 1: Cargar la base de datos externa
+            df_bd = cargar_base_datos()
             
-            barra = st.progress(0)
-            status = st.empty()
-            
-            for i, (index, fila) in enumerate(variantes_analisis.iterrows()):
-                rsid = fila['ID']
-                status.text(f"Analizando marcador {rsid}...")
+            if not df_bd.empty:
+                variantes_analisis = variantes_conocidas.head(5).copy()
+                resultados_sig, lista_farmacos, lista_recom = [], [], []
                 
-                resultados_sig.append(consultar_ensembl(rsid))
-                farma_info = consultar_farmacogenomica(rsid)
-                lista_farmacos.append(farma_info['farmaco'])
-                lista_recom.append(farma_info['recomendacion'])
+                barra = st.progress(0)
+                status = st.empty()
                 
-                barra.progress((i + 1) / len(variantes_analisis))
-                time.sleep(0.4)
-            
-            variantes_analisis['Significado'] = resultados_sig
-            variantes_analisis['Farmaco'] = lista_farmacos
-            variantes_analisis['Recomendacion_Clinica'] = lista_recom
-            
-            status.success("Análisis completado satisfactoriamente.")
-            st.dataframe(variantes_analisis[['ID', 'Farmaco', 'Recomendacion_Clinica']], width='stretch')
-            
-            # Generación de descarga
-            pdf_out = generar_pdf_bytes(variantes_analisis)
-            st.download_button(
-                label="📥 Descargar Informe Clínico (PDF)",
-                data=pdf_out,
-                file_name="informe_farmacogenomico.pdf",
-                mime="application/pdf"
-            )
+                for i, (index, fila) in enumerate(variantes_analisis.iterrows()):
+                    rsid = fila['ID']
+                    status.text(f"Analizando marcador {rsid}...")
+                    
+                    # Consulta Ensembl
+                    resultados_sig.append(consultar_ensembl(rsid))
+                    
+                    # Consulta nuestra nueva base de datos CSV
+                    farma_info = consultar_farmacogenomica(rsid, df_bd)
+                    lista_farmacos.append(farma_info['farmaco'])
+                    lista_recom.append(farma_info['recomendacion'])
+                    
+                    barra.progress((i + 1) / len(variantes_analisis))
+                    time.sleep(0.4)
+                
+                variantes_analisis['Significado'] = resultados_sig
+                variantes_analisis['Farmaco'] = lista_farmacos
+                variantes_analisis['Recomendacion_Clinica'] = lista_recom
+                
+                status.success("Análisis completado satisfactoriamente.")
+                st.dataframe(variantes_analisis[['ID', 'Farmaco', 'Recomendacion_Clinica']], width='stretch')
+                
+                pdf_out = generar_pdf_bytes(variantes_analisis)
+                st.download_button(
+                    label="📥 Descargar Informe Clínico (PDF)",
+                    data=pdf_out,
+                    file_name="informe_farmacogenomico.pdf",
+                    mime="application/pdf"
+                )
