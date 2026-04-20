@@ -1,8 +1,0 @@
-ID_Variante,Farmaco,Recomendacion
-rs6054257,Simvastatina,"[RIESGO] Alto riesgo de miopatia. Reducir dosis a max. 20mg."
-rs6040355,Amitriptilina,"[ATENCION] Metabolizador ultrarapido. Riesgo de ineficacia."
-rs4149056,Simvastatina,"[RIESGO] Variante SLCO1B1. Alto riesgo de miopatia severa."
-rs4244285,Clopidogrel,"[RIESGO] Metabolizador pobre CYP2C19*2. Valorar alternativa."
-rs1799853,Fenitoina,"[RIESGO] CYP2C9*2. Riesgo de toxicidad neurologica (nistagmus, ataxia)."
-rs3745274,Tamoxifeno,"[RIESGO] Variante CYP2B6. Valorar alternativa (Letrozol, Anastrozol)."
-rs2395029,Abacavir,"[PELIGRO] Variante HLA-B*5701. CONTRAINDICADO ABSOLUTAMENTE."
