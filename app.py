@@ -5,40 +5,50 @@ import time
 import io
 from fpdf import FPDF
 
-# 1. Función de comprobación de seguridad (Login)
+# 1. Función de comprobación de seguridad (Login Multi-usuario)
 def check_password():
-    """Devuelve True si el usuario introdujo las credenciales correctas."""
+    """Comprueba si el usuario y contraseña existen en los secretos del servidor."""
     def password_entered():
-        """Comprueba si las credenciales coinciden."""
-        if st.session_state["username"] == "admin" and st.session_state["password"] == "medico2026":
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]
-            del st.session_state["username"]
-        else:
+        # Intentamos obtener los usuarios de los secretos
+        try:
+            usuarios_autorizados = st.secrets["usuarios"]
+            user = st.session_state["username"]
+            password = st.session_state["password"]
+
+            if user in usuarios_autorizados and str(password) == str(usuarios_autorizados[user]):
+                st.session_state["password_correct"] = True
+                del st.session_state["password"]
+                del st.session_state["username"]
+            else:
+                st.session_state["password_correct"] = False
+        except Exception:
+            st.error("Error técnico: No se han configurado los secretos 'usuarios' en el servidor.")
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
         st.title("🔐 Acceso al Portal Clínico")
-        st.text_input("Usuario", on_change=password_entered, key="username")
+        st.write("Introduzca las credenciales de su centro de salud.")
+        st.text_input("ID de Clínica / Usuario", on_change=password_entered, key="username")
         st.text_input("Contraseña", type="password", on_change=password_entered, key="password")
         return False
     elif not st.session_state["password_correct"]:
         st.title("🔐 Acceso al Portal Clínico")
-        st.text_input("Usuario", on_change=password_entered, key="username")
+        st.text_input("ID de Clínica / Usuario", on_change=password_entered, key="username")
         st.text_input("Contraseña", type="password", on_change=password_entered, key="password")
-        st.error("😕 Usuario o contraseña incorrectos")
+        st.error("😕 Credenciales no válidas para este centro.")
         return False
     else:
         return True
 
-# 2. Aplicación Principal (Solo se ejecuta tras el Login)
+# 2. Aplicación Principal
 if check_password():
     
     st.set_page_config(page_title="VCI Farmacogenómico", page_icon="💊", layout="wide")
 
     with st.sidebar:
         st.header("Panel de Control")
-        st.write(f"Usuario: **Especialista Clínico**")
+        # Mostramos un saludo genérico o podrías personalizarlo
+        st.write("✅ Sesión Autorizada")
         if st.button("Cerrar Sesión"):
             st.session_state["password_correct"] = False
             st.rerun()
@@ -50,12 +60,10 @@ if check_password():
 
     @st.cache_data
     def cargar_base_datos():
-        """Carga el CSV en memoria para consultas rápidas."""
         try:
-            # Intentamos leer el archivo en la carpeta data
             return pd.read_csv("data/bd_farmacos.csv", index_col="ID_Variante")
-        except Exception as e:
-            st.error(f"Error al cargar la base de datos: Asegúrate de que el archivo 'data/bd_farmacos.csv' existe.")
+        except Exception:
+            st.error("Error: No se encuentra la carpeta 'data' o el archivo 'bd_farmacos.csv'.")
             return pd.DataFrame()
 
     def consultar_ensembl(rs_id):
@@ -70,17 +78,10 @@ if check_password():
         except: return "Error de conexión"
 
     def consultar_farmacogenomica(rs_id, df_bd):
-        """Busca interacciones en el DataFrame de la base de datos externa."""
         if not df_bd.empty and rs_id in df_bd.index:
             fila = df_bd.loc[rs_id]
-            return {
-                "farmaco": str(fila["Farmaco"]),
-                "recomendacion": str(fila["Recomendacion"])
-            }
-        return {
-            "farmaco": "Sin contraindicaciones",
-            "recomendacion": "Dosis estandar segura."
-        }
+            return {"farmaco": str(fila["Farmaco"]), "recomendacion": str(fila["Recomendacion"])}
+        return {"farmaco": "Sin contraindicaciones", "recomendacion": "Dosis estandar segura."}
 
     def generar_pdf_bytes(df_resultados):
         pdf = FPDF()
@@ -110,45 +111,30 @@ if check_password():
         df = pd.read_csv(io.StringIO("\n".join(lineas)), sep='\t', skiprows=lineas_saltar)
         df.rename(columns={'#CHROM': 'CHROM'}, inplace=True)
         variantes_conocidas = df[df['ID'].str.startswith('rs', na=False)].copy()
-        st.info(f"✅ Archivo VCF procesado. Se han detectado {len(variantes_conocidas)} variantes con ID.")
+        st.info(f"✅ Archivo VCF procesado. {len(variantes_conocidas)} variantes detectadas.")
         
         if st.button("Ejecutar Análisis Clínico"):
-            # Paso 1: Cargar la base de datos externa
             df_bd = cargar_base_datos()
-            
             if not df_bd.empty:
                 variantes_analisis = variantes_conocidas.head(5).copy()
                 resultados_sig, lista_farmacos, lista_recom = [], [], []
-                
                 barra = st.progress(0)
-                status = st.empty()
                 
                 for i, (index, fila) in enumerate(variantes_analisis.iterrows()):
                     rsid = fila['ID']
-                    status.text(f"Analizando marcador {rsid}...")
-                    
-                    # Consulta Ensembl
                     resultados_sig.append(consultar_ensembl(rsid))
-                    
-                    # Consulta nuestra nueva base de datos CSV
                     farma_info = consultar_farmacogenomica(rsid, df_bd)
                     lista_farmacos.append(farma_info['farmaco'])
                     lista_recom.append(farma_info['recomendacion'])
-                    
                     barra.progress((i + 1) / len(variantes_analisis))
-                    time.sleep(0.4)
+                    time.sleep(0.2)
                 
                 variantes_analisis['Significado'] = resultados_sig
                 variantes_analisis['Farmaco'] = lista_farmacos
                 variantes_analisis['Recomendacion_Clinica'] = lista_recom
                 
-                status.success("Análisis completado satisfactoriamente.")
+                st.success("Análisis completado.")
                 st.dataframe(variantes_analisis[['ID', 'Farmaco', 'Recomendacion_Clinica']], width='stretch')
                 
                 pdf_out = generar_pdf_bytes(variantes_analisis)
-                st.download_button(
-                    label="📥 Descargar Informe Clínico (PDF)",
-                    data=pdf_out,
-                    file_name="informe_farmacogenomico.pdf",
-                    mime="application/pdf"
-                )
+                st.download_button(label="📥 Descargar Informe Clínico (PDF)", data=pdf_out, file_name="informe_vci.pdf", mime="application/pdf")
