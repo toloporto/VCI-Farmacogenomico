@@ -1,0 +1,11 @@
+CHROM,POS,ID,REF,ALT,QUAL,FILTER,INFO,Farmaco,Recomendacion,Nivel
+1,11856378,rs4149056,T,C,60,PASS,AF=0.15,Simvastatina,[RIESGO] Variante SLCO1B1. Alto riesgo de miopatia severa.,Riesgo
+10,96541616,rs4244285,C,T,72,PASS,AF=0.30,Clopidogrel,[RIESGO] Metabolizador pobre CYP2C19*2. Valorar alternativa.,Riesgo
+10,94781859,rs1799853,C,T,85,PASS,AF=0.12,Fenitoina,"[RIESGO] CYP2C9*2. Riesgo de toxicidad neurologica (nistagmus, ataxia).",Riesgo
+16,68831706,rs3745274,G,T,55,PASS,AF=0.08,Tamoxifeno,"[RIESGO] Variante CYP2B6. Valorar alternativa (Letrozol, Anastrozol).",Riesgo
+6,2794021,rs2395029,A,G,90,PASS,AF=0.02,Abacavir,[PELIGRO] Variante HLA-B*5701. CONTRAINDICADO ABSOLUTAMENTE.,Peligro
+12,21178614,rs6054257,A,G,65,PASS,AF=0.20,Simvastatina,[RIESGO] Alto riesgo de miopatia. Reducir dosis a max. 20mg.,Riesgo
+22,42126611,rs6040355,C,T,70,PASS,AF=0.18,Amitriptilina,[ATENCION] Metabolizador ultrarapido. Riesgo de ineficacia.,Atención
+1,161576031,rs9923231,G,A,78,PASS,AF=0.35,N/A,Dosis estándar segura,Seguro
+16,31094050,rs1800460,C,T,88,PASS,AF=0.05,N/A,Dosis estándar segura,Seguro
+13,48037825,rs1057910,A,C,66,PASS,AF=0.10,N/A,Dosis estándar segura,Seguro

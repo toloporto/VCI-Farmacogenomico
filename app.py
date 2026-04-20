@@ -3,190 +3,188 @@ import pandas as pd
 import requests
 import time
 import io
+import os
 from fpdf import FPDF
-import plotly.express as px  # Nueva librería para gráficos
+from fpdf.enums import XPos, YPos
+import plotly.express as px
 
-# 1. Función de comprobación de seguridad (Login Multi-usuario)
+# --- 1. CONFIGURACIÓN Y SEGURIDAD ---
+st.set_page_config(page_title="VCI Farmacogenómica Pro", layout="wide")
+
 def check_password():
-    def password_entered():
-        try:
-            usuarios_autorizados = st.secrets["usuarios"]
-            user = st.session_state["username"]
-            password = st.session_state["password"]
-            if user in usuarios_autorizados and str(password) == str(usuarios_autorizados[user]):
-                st.session_state["password_correct"] = True
-                del st.session_state["password"]
-                del st.session_state["username"]
-            else:
-                st.session_state["password_correct"] = False
-        except Exception:
-            st.error("Error técnico: Configure los secretos en el servidor.")
-            st.session_state["password_correct"] = False
+    if st.session_state.get("password_correct", False):
+        return True
+    st.title("🔐 Acceso al Portal Clínico")
+    user = st.text_input("ID de Clínica / Usuario", key="login_user")
+    password = st.text_input("Contraseña", type="password", key="login_pass")
+    if st.button("Entrar"):
+        if user in st.secrets["usuarios"] and password == st.secrets["usuarios"][user]:
+            st.session_state["password_correct"] = True
+            st.session_state["username_logged"] = user
+            st.rerun()
+        else:
+            st.error("❌ Credenciales incorrectas")
+    return False
 
-    if "password_correct" not in st.session_state:
-        st.title("🔐 Acceso al Portal Clínico")
-        st.text_input("ID de Clínica / Usuario", on_change=password_entered, key="username")
-        st.text_input("Contraseña", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.title("🔐 Acceso al Portal Clínico")
-        st.text_input("ID de Clínica / Usuario", on_change=password_entered, key="username")
-        st.text_input("Contraseña", type="password", on_change=password_entered, key="password")
-        st.error("😕 Credenciales no válidas.")
-        return False
-    return True
+# --- 2. FUNCIONES DE APOYO ---
+def cargar_base_datos():
+    try: return pd.read_csv('data/bd_farmacos.csv')
+    except: return pd.DataFrame(columns=['ID_Variante', 'Farmaco', 'Recomendacion'])
 
+def consultar_farma(rsid, df_bd):
+    match = df_bd[df_bd['ID_Variante'] == rsid]
+    if not match.empty:
+        reco = match.iloc[0]['Recomendacion']
+        nivel = 'Peligro' if '[PELIGRO]' in reco else 'Riesgo' if '[RIESGO]' in reco else 'Atención' if '[ATENCION]' in reco else 'Seguro'
+        return {'farmaco': match.iloc[0]['Farmaco'], 'reco': reco, 'nivel': nivel}
+    return {'farmaco': 'N/A', 'reco': 'Dosis estándar segura', 'nivel': 'Seguro'}
+
+def procesar_vcf_limpio(archivo_subido):
+    try:
+        contenido = archivo_subido.getvalue().decode("utf-8").splitlines()
+        linea_header = next((i for i, l in enumerate(contenido) if l.startswith("#CHROM")), -1)
+        if linea_header == -1: return None
+        df = pd.read_csv(io.StringIO("\n".join(contenido[linea_header:])), sep=None, engine='python')
+        df.columns = df.columns.str.replace('#', '')
+        df_rs = df[df['ID'].str.contains('rs', na=False)].copy()
+        df_rs['ID'] = df_rs['ID'].str.strip()
+        return df_rs
+    except: return None
+
+def guardar_analisis_pro(id_paciente, df_resultados, clinica):
+    if not os.path.exists("data/analisis"): os.makedirs("data/analisis")
+    path_file = f"data/analisis/{time.strftime('%Y%m%d_%H%M')}_{id_paciente}.csv"
+    df_resultados.to_csv(path_file, index=False)
+    nuevo = pd.DataFrame([{
+        "Fecha": time.strftime("%Y-%m-%d %H:%M"),
+        "Paciente": id_paciente,
+        "Riesgo_Max": df_resultados['Nivel'].iloc[0] if 'Nivel' in df_resultados.columns else "Seguro",
+        "Archivo_Full": path_file
+    }])
+    hist_path = "data/historial_detallado.csv"
+    if os.path.exists(hist_path): pd.concat([pd.read_csv(hist_path), nuevo]).to_csv(hist_path, index=False)
+    else: nuevo.to_csv(hist_path, index=False)
+
+# --- 3. EXPORTACIÓN PDF (Sintaxis 2026) ---
+def generar_reporte_pdf(id_paciente, df, clinica):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("helvetica", "B", 18)
+    pdf.set_text_color(31, 119, 180)
+    pdf.cell(0, 10, "VCI FARMACOGENÓMICA PRO", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+    pdf.set_font("helvetica", "", 10)
+    pdf.set_text_color(100)
+    pdf.cell(0, 5, f"Clínica: {clinica} | Fecha: {time.strftime('%d/%m/%Y')}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+    pdf.ln(10)
+    pdf.set_fill_color(230, 240, 255)
+    pdf.set_font("helvetica", "B", 12)
+    pdf.set_text_color(0)
+    pdf.cell(0, 10, f" PACIENTE: {id_paciente}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
+    pdf.ln(5)
+    for _, r in df.iterrows():
+        if r['Nivel'] == 'Peligro': pdf.set_fill_color(255, 200, 200)
+        elif r['Nivel'] == 'Riesgo': pdf.set_fill_color(255, 230, 180)
+        else: pdf.set_fill_color(255, 255, 255)
+        top = pdf.get_y()
+        pdf.set_font("helvetica", "B", 10)
+        pdf.cell(40, 10, f" {r['ID']}", 1, new_x=XPos.RIGHT, new_y=YPos.TOP, align='L', fill=True)
+        pdf.cell(50, 10, f" {r['Farmaco']}", 1, new_x=XPos.RIGHT, new_y=YPos.TOP, align='L', fill=True)
+        pdf.set_font("helvetica", "", 9)
+        pdf.multi_cell(100, 5, f" {r['Recomendacion']}", 1, 'L', True)
+        pdf.set_y(max(pdf.get_y(), top + 10))
+    return bytes(pdf.output())
+
+# --- 4. INTERFAZ Y ESTADOS ---
 if check_password():
-    st.set_page_config(page_title="VCI Pro Dashboard", page_icon="📊", layout="wide")
+    # Inicialización de estados
+    if 'df_activo' not in st.session_state: st.session_state.df_activo = None
+    if 'id_activo' not in st.session_state: st.session_state.id_activo = None
+    if 'source' not in st.session_state: st.session_state.source = None
 
     with st.sidebar:
-        st.header("⚙️ Panel")
-        if st.button("Cerrar Sesión"):
-            st.session_state["password_correct"] = False
+        st.header("📂 Gestión de Pacientes")
+        if os.path.exists("data/historial_detallado.csv"):
+            h = pd.read_csv("data/historial_detallado.csv")
+            busqueda = st.text_input("🔍 Buscar Paciente")
+            if busqueda: h = h[h['Paciente'].str.contains(busqueda, case=False, na=False)]
+            
+            st.write("---")
+            lista_opciones = ["-- Seleccionar --"] + [f"{r['Paciente']} ({r['Fecha']})" for _, r in h.iterrows()]
+            seleccion = st.selectbox("Recuperar registro:", lista_opciones)
+            
+            if seleccion != "-- Seleccionar --":
+                idx = lista_opciones.index(seleccion) - 1
+                row = h.iloc[idx]
+                st.session_state.df_activo = pd.read_csv(row['Archivo_Full'])
+                st.session_state.id_activo = row['Paciente']
+                st.session_state.source = 'historial'
+            
+            st.write("---")
+            if st.button("✨ Limpiar Pantalla"):
+                st.session_state.df_activo = None
+                st.session_state.id_activo = None
+                st.session_state.source = None
+                if "uploader" in st.session_state:
+                    del st.session_state["uploader"]
+                st.rerun()
+            if st.button("🗑️ Borrar Historial"):
+                if os.path.exists("data/historial_detallado.csv"): os.remove("data/historial_detallado.csv")
+                st.rerun()
+        else:
+            st.info("Historial vacío.")
+
+    st.title("🧬 VCI Farmacogenómica Pro")
+    
+    # MOSTRAR CARGADOR SOLO SI NO HAY DATOS
+    if st.session_state.df_activo is None:
+        archivo = st.file_uploader("Cargar genoma (.vcf)", type=['vcf', 'txt'], key="uploader")
+        if archivo:
+            v_raw = procesar_vcf_limpio(archivo)
+            if v_raw is not None:
+                st.session_state.df_activo = v_raw.head(20)
+                st.session_state.id_activo = archivo.name.split('.')[0]
+                st.session_state.source = 'upload'
+                st.rerun()
+
+    # BOTÓN DE ANÁLISIS (Sección informativa mejorada)
+    if st.session_state.df_activo is not None and 'Nivel' not in st.session_state.df_activo.columns:
+        st.success(f"✅ Archivo validado con éxito: **{st.session_state.id_activo}**")
+        num_v = len(st.session_state.df_activo)
+        st.info(f"📊 Se han detectado **{num_v}** variantes listas para análisis.")
+        
+        if st.button("🚀 Iniciar Análisis Visual"):
+            df = st.session_state.df_activo.copy()
+            db = cargar_base_datos()
+            fars, recs, nivs = [], [], []
+            barra = st.progress(0.0)
+            for i, (idx, r) in enumerate(df.iterrows()):
+                res = consultar_farma(r['ID'], db)
+                fars.append(res['farmaco']); recs.append(res['reco']); nivs.append(res['nivel'])
+                barra.progress(float((i + 1) / len(df)))
+                time.sleep(0.04)
+            df['Farmaco'], df['Recomendacion'], df['Nivel'] = fars, recs, nivs
+            st.session_state.df_activo = df
+            clinica_n = st.session_state.get("username_logged", "Clínica VCI")
+            guardar_analisis_pro(st.session_state.id_activo, df, clinica_n)
             st.rerun()
 
-        st.divider()
-        st.subheader("📁 Historial Reciente")
-        try:
-            df_h = pd.read_csv("data/historial_clinico.csv")
-            st.dataframe(df_h.tail(5), hide_index=True)
-        except:
-            st.write("No hay análisis previos.")
+    # DASHBOARD
+    if st.session_state.df_activo is not None and 'Nivel' in st.session_state.df_activo.columns:
+        df = st.session_state.df_activo
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            fig = px.pie(df, names='Nivel', title="Distribución de Riesgo", hole=0.4,
+                         color='Nivel', color_discrete_map={'Peligro':'#b00020','Riesgo':'#ef553b','Atención':'#fecb52','Seguro':'#00cc96'})
+            st.plotly_chart(fig, width='stretch')
+            pdf = generar_reporte_pdf(st.session_state.id_activo, df, "Clínica VCI")
+            st.download_button("📩 Descargar PDF", pdf, f"Informe_{st.session_state.id_activo}.pdf", "application/pdf")
 
-    st.title("💊 VCI Farmacogenómica Pro")
-    st.write("Panel de análisis genómico y respuesta a fármacos.")
-
-    @st.cache_data
-    def cargar_base_datos():
-        """Carga la BD de fármacos con soporte para RSIDs duplicados."""
-        try:
-            # No usamos index_col para manejar RSIDs con múltiples fármacos
-            df = pd.read_csv("data/bd_farmacos.csv", encoding="utf-8")
-            return df
-        except:
-            return pd.DataFrame()
-
-    def guardar_en_historial(id_paciente, total_variantes, riesgo_pct):
-        """Guarda un resumen del análisis en un archivo local para persistencia."""
-        nuevo_registro = pd.DataFrame([{
-            "Fecha": time.strftime("%Y-%m-%d %H:%M"),
-            "Paciente_ID": id_paciente,
-            "Total_Var": total_variantes,
-            "Riesgo_%": f"{riesgo_pct:.1f}%"
-        }])
-        
-        try:
-            historial = pd.read_csv("data/historial_clinico.csv")
-            historial = pd.concat([historial, nuevo_registro], ignore_index=True)
-        except FileNotFoundError:
-            historial = nuevo_registro
-        
-        historial.to_csv("data/historial_clinico.csv", index=False)
-
-    def consultar_ensembl(rs_id):
-        servidor = "https://rest.ensembl.org"
-        endpoint = f"/variation/human/{rs_id}?"
-        try:
-            r = requests.get(servidor + endpoint, headers={"Content-Type": "application/json"})
-            if not r.ok: return "No encontrado"
-            sig = r.json().get('clinical_significance', [])
-            return ", ".join(sig) if sig else "Benigno/Frecuente"
-        except: return "Error API"
-
-    def consultar_farma(rs_id, df_bd):
-        """Consulta la BD local. Maneja RSIDs que afectan a múltiples fármacos."""
-        if df_bd.empty or "ID_Variante" not in df_bd.columns:
-            return {"farmaco": "N/A", "reco": "Dosis estándar segura", "nivel": "Seguro"}
-        
-        # Filtrar todas las filas para este RSID
-        coincidencias = df_bd[df_bd["ID_Variante"] == rs_id]
-        
-        if coincidencias.empty:
-            return {"farmaco": "N/A", "reco": "Dosis estándar segura", "nivel": "Seguro"}
-        
-        # Concatenar todos los fármacos y recomendaciones encontrados
-        farmacos = " / ".join(coincidencias["Farmaco"].astype(str).tolist())
-        recos = " | ".join(coincidencias["Recomendacion"].astype(str).tolist())
-        
-        # Determinar el nivel más crítico encontrado
-        recos_str = recos.upper()
-        if "[PELIGRO]" in recos_str:
-            nivel = "Peligro"
-        elif "[RIESGO]" in recos_str:
-            nivel = "Riesgo"
-        elif "[ATENCION]" in recos_str:
-            nivel = "Atención"
-        else:
-            nivel = "Seguro"
-        
-        return {"farmaco": farmacos, "reco": recos, "nivel": nivel}
-
-    archivo_subido = st.file_uploader("Cargar archivo VCF", type=['vcf'])
-
-    if archivo_subido:
-        df_bd = cargar_base_datos()
-        lineas = archivo_subido.getvalue().decode("utf-8").splitlines()
-        lineas_vcf = [l for l in lineas if not l.startswith('##')]
-        df = pd.read_csv(io.StringIO("\n".join(lineas_vcf)), sep='\t')
-        df.rename(columns={'#CHROM': 'CHROM'}, inplace=True)
-        variantes = df[df['ID'].str.startswith('rs', na=False)].head(10).copy()
-
-        if st.button("🚀 Iniciar Análisis Visual"):
-            res_sig, res_far, res_rec, res_niv = [], [], [], []
-            barra = st.progress(0)
-            
-            for i, (idx, fila) in enumerate(variantes.iterrows()):
-                rsid = fila['ID']
-                res_sig.append(consultar_ensembl(rsid))
-                f = consultar_farma(rsid, df_bd)
-                res_far.append(f['farmaco'])
-                res_rec.append(f['reco'])
-                res_niv.append(f['nivel'])
-                barra.progress((i + 1) / len(variantes))
-                time.sleep(0.1)
-
-            variantes['Farmaco'] = res_far
-            variantes['Recomendacion'] = res_rec
-            variantes['Nivel'] = res_niv
-
-            # Guardar en historial
-            id_paciente = archivo_subido.name.split('.')[0]
-            total_vars = len(variantes)
-            riesgo_pct = (variantes['Nivel'] != 'Seguro').sum() / total_vars * 100 if total_vars > 0 else 0
-            guardar_en_historial(id_paciente, total_vars, riesgo_pct)
-
-            # --- DASHBOARD VISUAL ---
-            st.divider()
-            col1, col2 = st.columns([1, 2])
-
-            with col1:
-                st.subheader("📊 Resumen de Riesgos")
-                # Gráfico de tarta con los cuatro niveles de alerta
-                fig = px.pie(variantes, names='Nivel', color='Nivel',
-                             color_discrete_map={
-                                 'Peligro':    '#b00020',   # rojo oscuro
-                                 'Riesgo':     '#ef553b',   # rojo
-                                 'Atención':   '#fecb52',   # amarillo
-                                 'Seguro':     '#00cc96'    # verde
-                             },
-                             hole=0.4)
-                st.plotly_chart(fig, use_container_width=True)
-
-            with col2:
-                st.subheader("📋 Hallazgos Críticos")
-                riesgos = variantes[variantes['Nivel'] != 'Seguro']
-                if not riesgos.empty:
-                    for _, r in riesgos.iterrows():
-                        # Mostrar con distintos colores según gravedad
-                        if r['Nivel'] == 'Peligro':
-                            st.error(f"🚨 **{r['ID']}** → **{r['Farmaco']}**: {r['Recomendacion']}")
-                        elif r['Nivel'] == 'Riesgo':
-                            st.warning(f"⚠️ **{r['ID']}** → **{r['Farmaco']}**: {r['Recomendacion']}")
-                        else:
-                            st.info(f"ℹ️ **{r['ID']}** → **{r['Farmaco']}**: {r['Recomendacion']}")
-                else:
-                    st.success("✅ No se detectaron interacciones de riesgo en los marcadores analizados.")
-
-            st.divider()
-            st.subheader("🔍 Detalle Completo")
-            st.dataframe(variantes[['ID', 'Farmaco', 'Recomendacion', 'Nivel']], width='stretch')
+        with c2:
+            st.subheader("📋 Hallazgos Críticos")
+            riesgos = df[df['Nivel'] != 'Seguro']
+            if not riesgos.empty:
+                for _, r in riesgos.iterrows():
+                    if r['Nivel'] == 'Peligro': st.error(f"🚨 **{r['Farmaco']}**: {r['Recomendacion']}")
+                    elif r['Nivel'] == 'Riesgo': st.warning(f"⚠️ **{r['Farmaco']}**: {r['Recomendacion']}")
+            else: st.success("No se detectaron riesgos genómicos.")
+            st.dataframe(df[['ID', 'Farmaco', 'Nivel']], width='stretch')
